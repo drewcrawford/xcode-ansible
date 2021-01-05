@@ -1,0 +1,151 @@
+# © 2021 DrewCrawfordApps LLC.
+# Unless explicitly acquired and licensed from Licensor under another
+# license, the contents of this file are subject to the Reciprocal Public
+# License ("RPL") Version 1.5, or subsequent versions as allowed by the RPL,
+# and You may not copy or use this file in either source code or executable
+# form, except in compliance with the terms and conditions of the RPL.
+# 
+# All software distributed under the RPL is provided strictly on an "AS
+# IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED, AND
+# LICENSOR HEREBY DISCLAIMS ALL SUCH WARRANTIES, INCLUDING WITHOUT
+# LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+# PURPOSE, QUIET ENJOYMENT, OR NON-INFRINGEMENT. See the RPL for specific
+# language governing rights and limitations under the RPL. 
+
+---
+- name: check if xcode is in /Applications
+  register: applications_xcode
+  stat:
+      path: "/Applications/Xcode_{{ xcode_version }}.app"
+      get_attributes: false
+      get_checksum: false
+      get_mime: false
+
+- name: Move xcode to applications
+  # all these instructions associated with getting xcode into /Applications
+  # skip all of them if applications_xcode.stat exists
+  when: applications_xcode.stat.exists == false
+  block:
+    - name: Check downloaded xcode
+        # per https://github.com/ansible/ansible/issues/64016, downloading does
+        # not skip if file exists
+      stat: 
+        path: "/tmp/Xcode_{{ xcode_version }}.xip"
+        get_attributes: false
+        get_checksum: false
+        get_mime: false
+      register: has_xcode
+      
+    - name: download xcode
+      get_url: 
+        url: "{{ xcode_url }}/Xcode_{{ xcode_version }}.xip"
+        dest: "/tmp/Xcode_{{ xcode_version }}.xip"
+      when: has_xcode.stat.exists == false
+
+    - name: extract xcode
+      shell:
+        # we want to put extracted xcode into a special folder because we don't know exactly
+        # the name of the application
+        cmd: "mkdir -p archive; cd archive; xip -x ../Xcode_{{ xcode_version }}.xip"
+        chdir: "/tmp"
+        creates: "/tmp/archive"
+        warn: false
+        
+    
+    - name: move xcode
+      shell: 
+        # whatever the application was named, call it /Applications/Xcode_version.app now
+        cmd: "mv /tmp/archive/Xcode*.app /Applications/Xcode_{{ xcode_version }}.app"
+        creates: "/Applications/Xcode_{{ xcode_version }}.app"
+- name: Remove extracted archive
+  file:
+      state: absent
+      path: "/tmp/archive"
+  
+- name: Remove downloaded file
+  file:
+      state: absent
+      path: "/tmp/Xcode_{{ xcode_version }}.xip"
+
+# now that xcode is in the right folder, let's check launch status
+- name: check xcodebuild (may validate)
+  command:
+    cmd: "/Applications/Xcode_{{ xcode_version }}.app/Contents/Developer/usr/bin/xcodebuild -checkFirstLaunchStatus"
+  ignore_errors: yes
+  register: check_first_launch_status
+  changed_when: check_first_launch_status.rc != 0
+
+- name: Agree to xcode EULA
+  when: check_first_launch_status.rc == 69 #this appears to be the 'no license code'.
+  become: true
+  command:
+      cmd: "/Applications/Xcode_{{ xcode_version }}.app/Contents/Developer/usr/bin/xcodebuild -license accept"
+     
+
+# and run if needed
+- name: do xcode first launch
+  #in practice, this is 1 when we have accepted the license but we haven't done first launch.
+  when: check_first_launch_status.rc != 0 
+  command:
+      cmd: "/Applications/Xcode_{{ xcode_version }}.app/Contents/Developer/usr/bin/xcodebuild -runFirstLaunch"
+  become: true
+
+# check devtoolssecurity
+- name: Check DevToolsSecurity
+  command:
+      cmd: "DevToolsSecurity -status"
+  register: DevToolsSecurity
+  changed_when: false
+
+# enable if needed
+- name: Enable DevToolsSecurity
+  command:
+      cmd: "DevToolsSecurity -enable"
+  become: true
+  when: "'Developer mode is currently disabled.' in DevToolsSecurity.stdout"
+
+# aliases
+- name: "Prepare labels"
+  set_fact:
+    programmatic_labels: []
+- name: Process aliases
+  when: aliases is defined and aliases != None
+  block:
+    - name: "Create symlink"
+      file:
+        src: /Applications/Xcode_{{ xcode_version }}.app
+        dest: "/Applications/Xcode_{{ item }}.app"
+        state: link
+      with_items: "{{ aliases }}"
+      when: item != 'default'
+    - name: Add label
+      set_fact:
+        programmatic_labels: "{{ programmatic_labels  + [ 'xcode_' + item|string ] }}"
+      with_items: "{{ aliases }}"
+      when: item != 'default'
+    - name: Add symlink (default)
+      when: "'default' in aliases"
+      file:
+        src: "/Applications/Xcode_{{ xcode_version }}.app"
+        dest: "/Applications/Xcode.app"
+        state: link
+    - name: Add label (version)
+      set_fact:
+        programmatic_labels: "{{ programmatic_labels  + [ 'xcode_' + xcode_version|string ] }}"
+    - name: Add label (default)
+      set_fact:
+        programmatic_labels: "{{ programmatic_labels  + [ 'xcode' ] }}"
+      when: "'default' in aliases"
+
+# ansible-galaxy collection install community.general
+# to make this work
+- name: xcpretty
+  community.general.gem:
+    name: xcpretty
+    state: latest
+- name: xcpretty-actions
+  community.general.gem:
+    name: xcpretty-actions-formatter
+    state: latest
+    
+    

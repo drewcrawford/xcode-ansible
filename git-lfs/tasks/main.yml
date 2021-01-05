@@ -1,0 +1,71 @@
+# © 2021 DrewCrawfordApps LLC.
+# Unless explicitly acquired and licensed from Licensor under another
+# license, the contents of this file are subject to the Reciprocal Public
+# License ("RPL") Version 1.5, or subsequent versions as allowed by the RPL,
+# and You may not copy or use this file in either source code or executable
+# form, except in compliance with the terms and conditions of the RPL.
+# 
+# All software distributed under the RPL is provided strictly on an "AS
+# IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED, AND
+# LICENSOR HEREBY DISCLAIMS ALL SUCH WARRANTIES, INCLUDING WITHOUT
+# LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+# PURPOSE, QUIET ENJOYMENT, OR NON-INFRINGEMENT. See the RPL for specific
+# language governing rights and limitations under the RPL. 
+---
+- name: Determine latest version
+  block:
+      - name: "Make version API request"
+        register: latest_version_task
+        shell:
+          cmd: >
+                  /usr/bin/curl --silent "https://api.github.com/repos/git-lfs/git-lfs/releases/latest" | grep '"tag_name":' |      sed -E 's/.*"([^"]+)".*/\1/' | tr -d '\n' | tr -d 'v'
+          warn: false
+        changed_when: false
+        
+      - name: Learn version
+        set_fact: 
+            latest_version: "{{ latest_version_task.stdout }}"
+
+- name: Determine installed version
+  block:
+        - name: Check installed version
+          shell:
+            cmd: |  
+                    /usr/local/bin/git-lfs --version | sed -e 's@.*git-lfs/\(.*\)(GitHub.*@\1@' | tr -d '\n' | tr -d ' '
+          register: installed_version_task
+          ignore_errors: yes
+          changed_when: no
+        
+        - set_fact:
+            installed_version: "{{ installed_version_task.stdout | default('none') }}"
+  
+- debug:
+    var: installed_version
+- debug:
+    var: latest_version
+
+- name: Install git lfs
+  when: installed_version != latest_version
+  block:
+      - name: Download new release
+        get_url: 
+            url: https://github.com/git-lfs/git-lfs/releases/download/v{{ latest_version }}/git-lfs-darwin-amd64-v{{ latest_version }}.zip
+            dest: /tmp/git-lfs.zip
+      - name: Extract tarball
+        command: 
+              # According to ansible, unarchive doesn't work out of the box and this is "not a bug"
+              # extract the archive ourselves
+              warn: false
+              #-o overwrites files w/o prompting
+              #-d specify directory
+              cmd: "unzip -od /tmp/git-lfs git-lfs.zip"
+              chdir: /tmp
+      - name: Install
+        command: 
+              cmd: git-lfs/install.sh
+              chdir: /tmp
+        become: true #by default, /usr/local/bin is not user-writeable on osx
+          
+              
+    
+  

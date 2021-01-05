@@ -1,0 +1,129 @@
+# © 2021 DrewCrawfordApps LLC.
+# Unless explicitly acquired and licensed from Licensor under another
+# license, the contents of this file are subject to the Reciprocal Public
+# License ("RPL") Version 1.5, or subsequent versions as allowed by the RPL,
+# and You may not copy or use this file in either source code or executable
+# form, except in compliance with the terms and conditions of the RPL.
+# 
+# All software distributed under the RPL is provided strictly on an "AS
+# IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED, AND
+# LICENSOR HEREBY DISCLAIMS ALL SUCH WARRANTIES, INCLUDING WITHOUT
+# LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+# PURPOSE, QUIET ENJOYMENT, OR NON-INFRINGEMENT. See the RPL for specific
+# language governing rights and limitations under the RPL. 
+---
+- name: Determine latest version
+  block:
+      - name: "Make version API request"
+        register: latest_runner_version_task
+        shell:
+          cmd: >
+                  /usr/bin/curl --silent "https://api.github.com/repos/actions/runner/releases/latest" | grep '"tag_name":' |      sed -E 's/.*"([^"]+)".*/\1/' | tr -d '\n' | tr -d 'v'
+          warn: false
+        changed_when: false
+      - name: Learn version
+        set_fact: 
+            latest_runner_version: "{{ latest_runner_version_task.stdout }}"
+
+- name: Determine installed version
+  block:
+      - name: "Read installed version"
+        command: "~/github-actions-runner/config.sh --version"
+        register: installed_runner_version_task
+        ignore_errors: yes
+        changed_when: false
+      - name: "Process installed version"
+        set_fact:
+          installed_runner_version: "{{ installed_runner_version_task.stdout | default('<none>') }}"
+          
+- debug: 
+      var: installed_runner_version
+- debug:
+    var: latest_runner_version
+
+- name: Download/extract runner
+  when: "installed_runner_version != latest_runner_version"
+  block:
+    - name: Determine if we need the tarball
+        # per https://github.com/ansible/ansible/issues/64016, downloading does
+        # not skip if file exists
+      stat: 
+        path: "/tmp/github-actions-runner.tar.gz"
+        get_attributes: false
+        get_checksum: false
+        get_mime: false
+      register: has_tarball
+    - name: Get the tarball
+      get_url: 
+        url: "https://github.com/actions/runner/releases/download/v{{ latest_runner_version }}/actions-runner-osx-x64-{{ latest_runner_version }}.tar.gz"
+        dest: "/tmp/github-actions-runner.tar.gz"
+      when: has_tarball.stat.exists == false
+      
+    - name: Make install folder
+      file: 
+        path: ~/github-actions-runner
+        state: directory
+      
+    - name: Extract the tarball
+      # According to ansible, unarchive doesn't work out of the box and this is "not a bug"
+      # extract the archive ourselves
+      command: 
+          cmd: "tar -C ~/github-actions-runner -xf /tmp/github-actions-runner.tar.gz"
+          warn: false
+      notify: start or restart
+    
+- name: Remove downloaded file
+  file:
+      state: absent
+      path: "/tmp/github-actions-runner.tar.gz"  
+
+- name: Check configuration
+  block:
+    - name: "Stat"
+      stat:
+          path: "~/github-actions-runner/run.sh"
+          get_attributes: false
+          get_checksum: false
+          get_mime: false
+      register: configuration_stat
+    - name: "Extract fact"
+      set_fact:
+        has_configuration: "{{ configuration_stat.stat.exists }}"
+    
+    - name: "Determine if reconfiguration is required"
+      set_fact:
+        needs_reconfigure: true
+      when: has_configuration == false or runner_token is defined
+    - name: "Extract fact"
+      set_fact:
+        needs_reconfigure: "{{ needs_reconfigure | default(false) }}"
+      changed_when: needs_reconfigure
+      notify: reconfigure
+          
+- name: Check service installation
+  block: 
+    - name: Ask for service status
+      command:
+        chdir: "~/github-actions-runner"
+        cmd: "./svc.sh status"
+      changed_when: false
+      register: github_runner_status
+      # this task fails in the case that we have not configured
+      ignore_errors: yes
+    # next 2 tasks have "defined" case and "undefined" case depending on whether or not
+    # we were able to run the prior task
+    - name: "Extract installation facts"
+      set_fact:
+        installed: "{{ not 'not installed' in  github_runner_status.stdout }}"
+        running: "{{ 'Started' in  github_runner_status.stdout }}"
+      when: github_runner_status.stdout is defined
+    - name: "Default installation facts"
+      set_fact:
+        installed: false
+        running: false
+      when: github_runner_status.stdout is not defined
+      
+    - name: Install
+      command: /usr/bin/true
+      notify: install
+      when: not installed
