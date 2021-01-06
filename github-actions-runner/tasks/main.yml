@@ -12,6 +12,19 @@
 # PURPOSE, QUIET ENJOYMENT, OR NON-INFRINGEMENT. See the RPL for specific
 # language governing rights and limitations under the RPL. 
 ---
+#- debug: var=hostvars['localhost']
+
+- name: Calculate default labels
+  block:
+    - name: "Set macOS label"
+      set_fact: 
+        macos_majorlabel: "{{ 'macOS_' + ansible_distribution_major_version }}"
+    - name: "Set programmatic labels"
+      set_fact:
+        programmatic_labels: "{{ (programmatic_labels | default([])) + [ macos_majorlabel ] }}"
+    - debug: 
+         var: programmatic_labels
+  
 - name: Determine latest version
   block:
       - name: "Make version API request"
