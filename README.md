@@ -34,6 +34,8 @@ Create a `site.yml` with something like
 	  xcode_url: "https://my-xcode-folder.s3.us-east-1.amazonaws.com"
 
   roles:
+	# prevent sleep
+	- role: nosleep
 	  # Install xcode 12.3 and make it the default
 	- role: xcode
 	  vars:
